@@ -24,6 +24,20 @@ pub fn unreachable_pool() -> PgPool {
         .expect("lazy pool")
 }
 
+pub async fn seed_user(pool: &PgPool, id: &str, email: &str, name: &str, active: bool) {
+    sqlx::query(
+        r#"INSERT INTO "User" (id, email, "passwordHash", name, "isActive", "updatedAt")
+           VALUES ($1, $2, '', $3, $4, CURRENT_TIMESTAMP)"#,
+    )
+    .bind(id)
+    .bind(email)
+    .bind(name)
+    .bind(active)
+    .execute(pool)
+    .await
+    .expect("seed user");
+}
+
 pub async fn spawn_app(pool: PgPool) -> TestApp {
     spawn_app_with(Config::for_tests(), pool).await
 }

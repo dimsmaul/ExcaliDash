@@ -1,7 +1,9 @@
+pub mod auth;
 pub mod config;
 pub mod error;
 pub mod routes;
 pub mod state;
+pub mod time;
 
 use std::sync::Arc;
 
@@ -36,6 +38,7 @@ pub fn build_app(db: PgPool, cfg: Config) -> Router {
 
     Router::new()
         .route("/health", get(routes::misc::health))
+        .merge(auth::routes::router())
         .with_state(state)
         .layer(socket_layer)
         .layer(DefaultBodyLimit::max(cfg.body_limit_bytes))
