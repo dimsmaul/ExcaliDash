@@ -28,6 +28,7 @@ base64 = "0.22"
 hmac = "0.12"
 sha2 = "0.10"
 subtle = "2"
+ammonia = "4"
 rand = "0.8"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }

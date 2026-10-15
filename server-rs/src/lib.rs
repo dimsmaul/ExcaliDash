@@ -1,7 +1,9 @@
 pub mod auth;
+pub mod authz;
 pub mod config;
 pub mod error;
 pub mod routes;
+pub mod sanitize;
 pub mod state;
 pub mod time;
 
@@ -46,6 +48,7 @@ pub fn build_app(db: PgPool, cfg: Config) -> Router {
         .route("/health", get(routes::misc::health))
         .route("/csrf-token", get(auth::csrf::token_route))
         .merge(auth::routes::router())
+        .merge(routes::collections::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::csrf::middleware,

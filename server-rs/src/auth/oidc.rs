@@ -588,14 +588,7 @@ async fn resolve_user(
             .bind(role)
             .fetch_one(&mut *tx)
             .await?;
-            sqlx::query(&format!(
-                r#"INSERT INTO "Collection" (id, name, "userId", "createdAt", "updatedAt")
-                   VALUES ($1, 'Trash', $2, {NOW_UTC}, {NOW_UTC}) ON CONFLICT (id) DO NOTHING"#
-            ))
-            .bind(format!("trash:{}", user.id))
-            .bind(&user.id)
-            .execute(&mut *tx)
-            .await?;
+            crate::authz::ensure_trash_collection(&mut tx, &user.id).await?;
             user
         }
     };

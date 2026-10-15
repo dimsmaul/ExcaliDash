@@ -34,6 +34,27 @@ impl TestApp {
         }
     }
 
+    /// Request signed in as `user_id`, with a valid CSRF token + cookie attached.
+    pub async fn as_user(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        user_id: &str,
+    ) -> reqwest::RequestBuilder {
+        let csrf = self.csrf().await;
+        let pair = excalidash_server::auth::jwt::issue_pair(
+            &Config::for_tests(),
+            user_id,
+            &format!("{user_id}@example.com"),
+        );
+        self.request(method, path)
+            .header("x-csrf-token", csrf.token)
+            .header(
+                "Cookie",
+                format!("{}; excalidash-access-token={}", csrf.cookie, pair.access),
+            )
+    }
+
     /// Request without the cookie store, so tests control the `Cookie` header exactly.
     pub fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         reqwest::Client::builder()
@@ -77,6 +98,65 @@ pub async fn seed_user(pool: &PgPool, id: &str, email: &str, name: &str, active:
     .execute(pool)
     .await
     .expect("seed user");
+}
+
+pub async fn seed_collection(pool: &PgPool, id: &str, user_id: &str, name: &str) {
+    sqlx::query(
+        r#"INSERT INTO "Collection" (id, name, "userId", "updatedAt")
+           VALUES ($1, $2, $3, timezone('utc', now()))"#,
+    )
+    .bind(id)
+    .bind(name)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .expect("seed collection");
+}
+
+pub async fn seed_drawing(pool: &PgPool, id: &str, user_id: &str, collection_id: Option<&str>) {
+    sqlx::query(
+        r#"INSERT INTO "Drawing" (id, name, elements, "appState", "userId", "collectionId", "updatedAt")
+           VALUES ($1, $1, '[]', '{}', $2, $3, timezone('utc', now()))"#,
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(collection_id)
+    .execute(pool)
+    .await
+    .expect("seed drawing");
+}
+
+pub async fn seed_drawing_permission(
+    pool: &PgPool,
+    drawing_id: &str,
+    grantee: &str,
+    permission: &str,
+) {
+    sqlx::query(
+        r#"INSERT INTO "DrawingPermission" (id, "drawingId", "granteeUserId", permission, "createdByUserId", "updatedAt")
+           SELECT gen_random_uuid()::text, $1, $2, $3, d."userId", timezone('utc', now())
+           FROM "Drawing" d WHERE d.id = $1"#,
+    )
+    .bind(drawing_id)
+    .bind(grantee)
+    .bind(permission)
+    .execute(pool)
+    .await
+    .expect("seed drawing permission");
+}
+
+pub async fn seed_collection_share(pool: &PgPool, collection_id: &str, grantee: &str, role: &str) {
+    sqlx::query(
+        r#"INSERT INTO "CollectionShare" (id, "collectionId", "granteeUserId", role, "createdByUserId", "updatedAt")
+           SELECT gen_random_uuid()::text, $1, $2, $3, c."userId", timezone('utc', now())
+           FROM "Collection" c WHERE c.id = $1"#,
+    )
+    .bind(collection_id)
+    .bind(grantee)
+    .bind(role)
+    .execute(pool)
+    .await
+    .expect("seed collection share");
 }
 
 pub async fn spawn_app(pool: PgPool) -> TestApp {
