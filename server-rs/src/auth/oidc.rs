@@ -213,7 +213,11 @@ fn redirect(location: &str, cookies: &[String]) -> Response {
 /// Absolute URL on the frontend (first `FRONTEND_URL` origin): the frontend may be
 /// hosted apart from the API (e.g. Vercel), so post-login redirects must not be relative.
 fn to_frontend(state: &AppState, path: &str) -> String {
-    let origin = state.cfg.frontend_origins.first().map_or("", String::as_str);
+    let origin = state
+        .cfg
+        .frontend_origins
+        .first()
+        .map_or("", String::as_str);
     format!("{origin}{path}")
 }
 
