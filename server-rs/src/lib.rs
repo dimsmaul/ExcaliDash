@@ -7,6 +7,7 @@ pub mod files_store;
 pub mod routes;
 pub mod sanitize;
 pub mod snapshot_codec;
+pub mod socket;
 pub mod state;
 pub mod time;
 
@@ -48,13 +49,14 @@ pub fn build_app(db: PgPool, cfg: Config) -> Router {
     };
 
     Router::new()
-        .route("/health", get(routes::misc::health))
         .route("/csrf-token", get(auth::csrf::token_route))
+        .merge(routes::misc::router())
         .merge(auth::routes::router())
         .merge(routes::collections::router())
         .merge(routes::drawings::router())
         .merge(routes::history::router())
         .merge(routes::files::router(cfg.file_upload_max_bytes))
+        .merge(routes::sharing::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::csrf::middleware,
