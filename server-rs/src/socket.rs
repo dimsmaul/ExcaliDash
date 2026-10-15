@@ -13,6 +13,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use socketioxide::{
     extract::{AckSender, SocketRef, TryData},
+    handler::ConnectHandler,
     socket::Sid,
 };
 
@@ -48,16 +49,40 @@ fn room_of(drawing_id: &str) -> String {
     format!("drawing_{drawing_id}")
 }
 
-/// Registers the default namespace handlers.
+/// Registers the default namespace. Authentication runs as connect middleware (Node's
+/// `io.use`), i.e. before the client is told it is connected, so the event handlers
+/// below are in place before the first `join-room` can arrive.
 pub fn register(state: &AppState) {
-    let state = state.clone();
-    state
-        .io
-        .clone()
-        .ns("/", move |s: SocketRef, TryData(auth): TryData<Value>| {
-            let state = state.clone();
-            async move { on_connect(state, s, auth.ok()).await }
-        });
+    let handler_state = state.clone();
+    let auth_state = state.clone();
+    let on_connect = move |s: SocketRef| on_connect(&handler_state, &s);
+    let authenticate = move |s: SocketRef, TryData(auth): TryData<Value>| {
+        let state = auth_state.clone();
+        async move {
+            authenticate(&state, &s, auth.ok()).await;
+            Ok::<(), std::convert::Infallible>(())
+        }
+    };
+    state.io.clone().ns("/", on_connect.with(authenticate));
+}
+
+/// Resolve the socket's principal and create its state (anonymous sockets are allowed;
+/// access is enforced per drawing on `join-room`).
+async fn authenticate(state: &AppState, s: &SocketRef, auth: Option<Value>) {
+    let token = auth
+        .as_ref()
+        .and_then(|a| a.get("token"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| read_cookie(&s.req_parts().headers, ACCESS_TOKEN_COOKIE));
+    let principal = resolve_principal(state, token).await;
+    state.collab.sockets.lock().unwrap().insert(
+        s.id,
+        SocketState {
+            principal,
+            ..Default::default()
+        },
+    );
 }
 
 async fn resolve_principal(state: &AppState, token: Option<String>) -> Option<String> {
@@ -74,22 +99,8 @@ async fn resolve_principal(state: &AppState, token: Option<String>) -> Option<St
     (active == Some(true)).then_some(claims.user_id)
 }
 
-async fn on_connect(state: AppState, s: SocketRef, auth: Option<Value>) {
-    let token = auth
-        .as_ref()
-        .and_then(|a| a.get("token"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or_else(|| read_cookie(&s.req_parts().headers, ACCESS_TOKEN_COOKIE));
-    let principal = resolve_principal(&state, token).await;
-    state.collab.sockets.lock().unwrap().insert(
-        s.id,
-        SocketState {
-            principal,
-            ..Default::default()
-        },
-    );
-
+/// Synchronous on purpose: no await may run before the handlers are registered.
+fn on_connect(state: &AppState, s: &SocketRef) {
     let st = state.clone();
     s.on(
         "join-room",

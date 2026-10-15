@@ -33,8 +33,16 @@ async fn connect(app: &TestApp, user: Option<&str>) -> Peer {
     // rust_socketio's websocket transport fails its own handshake against a server that a
     // standard WebSocket client upgrades fine (verified with Node's WebSocket), so tests use
     // long-polling; the event protocol under test is identical on both transports.
+    // Unlike socket.io-client, rust_socketio does not buffer emits until the namespace is
+    // connected, so wait for the server's namespace CONNECT before handing the client out.
+    let connected = std::sync::Arc::new(tokio::sync::Notify::new());
+    let on_connect = connected.clone();
     let mut builder = ClientBuilder::new(app.base_url.clone())
         .transport_type(rust_socketio::TransportType::Polling)
+        .on(rust_socketio::Event::Connect, move |_, _| {
+            on_connect.notify_one();
+            async {}.boxed()
+        })
         .on_any(move |event, payload, _| {
             forward(any_tx.clone(), event.to_string(), payload);
             async {}.boxed()
@@ -48,10 +56,11 @@ async fn connect(app: &TestApp, user: Option<&str>) -> Peer {
             jwt::issue_pair(&Config::for_tests(), user, &format!("{user}@example.com")).access;
         builder = builder.auth(json!({ "token": token }));
     }
-    Peer {
-        client: builder.connect().await.expect("socket connects"),
-        events,
-    }
+    let client = builder.connect().await.expect("socket connects");
+    tokio::time::timeout(Duration::from_secs(5), connected.notified())
+        .await
+        .expect("namespace connected");
+    Peer { client, events }
 }
 
 impl Peer {
@@ -132,7 +141,7 @@ async fn presence_cursor_and_element_relay(pool: PgPool) {
     setup(&pool).await;
     let app = spawn_app(pool).await;
     let mut alice = connect(&app, Some("u1")).await;
-    let bob = connect(&app, Some("u2")).await;
+    let mut bob = connect(&app, Some("u2")).await;
     let mut carol = connect(&app, Some("u3")).await;
 
     alice.join("d1", "ignored").await;
@@ -146,8 +155,12 @@ async fn presence_cursor_and_element_relay(pool: PgPool) {
     assert_eq!(presence[0]["color"], "#123456");
     assert_eq!(presence[0]["isActive"], true);
 
+    // Each event runs as its own task (as in Node), so a peer's later events can overtake
+    // its join; wait for each join to land, like the editor does before broadcasting.
     bob.join("d1", "Bob").await;
+    bob.next("presence-update").await;
     carol.join("d1", "Carol").await;
+    carol.next("presence-update").await;
     let presence = alice.next("presence-update").await;
     assert!(presence.as_array().unwrap().len() >= 2);
 
