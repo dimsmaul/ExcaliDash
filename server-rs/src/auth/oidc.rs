@@ -131,9 +131,11 @@ pub fn login_error_location(code: &str, return_to: Option<&str>) -> String {
     format!("/login?{}", query.finish())
 }
 
+/// Optional extra gate on top of the identity provider: with no `ALLOWED_EMAILS`
+/// every verified account the provider lets through may sign in.
 pub fn is_email_allowed(cfg: &Config, email: &str) -> bool {
     let email = email.trim().to_lowercase();
-    cfg.allowed_emails.contains(&email)
+    cfg.allowed_emails.is_empty() || cfg.allowed_emails.contains(&email)
 }
 
 /// Provider metadata from `<issuer>/.well-known/openid-configuration`.
@@ -761,5 +763,12 @@ mod tests {
         let cfg = Config::for_tests();
         assert!(is_email_allowed(&cfg, "Alice@Example.com"));
         assert!(!is_email_allowed(&cfg, "mallory@example.com"));
+    }
+
+    #[test]
+    fn empty_allowlist_admits_everyone() {
+        let mut cfg = Config::for_tests();
+        cfg.allowed_emails.clear();
+        assert!(is_email_allowed(&cfg, "anyone@example.com"));
     }
 }

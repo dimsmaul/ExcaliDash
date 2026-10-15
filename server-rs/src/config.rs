@@ -117,12 +117,6 @@ impl Config {
             .map(|e| e.trim().to_lowercase())
             .filter(|e| !e.is_empty())
             .collect();
-        if auth_mode == AuthMode::OidcEnforced && allowed_emails.is_empty() {
-            return Err(
-                "AUTH_MODE=oidc_enforced requires ALLOWED_EMAILS (comma-separated emails allowed to sign in)"
-                    .into(),
-            );
-        }
 
         Ok(Config {
             port: u16::try_from(number("PORT", 8000)?).map_err(|_| "Invalid PORT".to_string())?,
@@ -323,16 +317,16 @@ mod tests {
     }
 
     #[test]
-    fn oidc_enforced_requires_allowlist() {
-        let err = Config::from_lookup(lookup(&with_base(&[
+    fn allowlist_is_optional() {
+        let cfg = Config::from_lookup(lookup(&with_base(&[
             ("AUTH_MODE", "oidc_enforced"),
             ("OIDC_ISSUER_URL", "https://accounts.google.com"),
             ("OIDC_CLIENT_ID", "cid"),
             ("OIDC_REDIRECT_URI", "https://x/api/auth/oidc/callback"),
             ("ALLOWED_EMAILS", " , "),
         ])))
-        .unwrap_err();
-        assert!(err.contains("ALLOWED_EMAILS"), "{err}");
+        .unwrap();
+        assert!(cfg.allowed_emails.is_empty());
     }
 
     #[test]
