@@ -30,6 +30,12 @@ pub struct Config {
     pub body_limit_bytes: usize,
     pub file_upload_max_bytes: usize,
     pub snapshot_retention: Duration,
+    /// Default lifetime of "anyone with the link" edit links.
+    pub link_share_edit_ttl: Duration,
+    /// Default lifetime of "anyone with the link" view links.
+    pub link_share_view_ttl: Duration,
+    /// Cap for edit-link lifetimes.
+    pub link_share_max_ttl: Duration,
 }
 
 impl Config {
@@ -132,6 +138,18 @@ impl Config {
             body_limit_bytes: (number("BODY_LIMIT_MB", 50)? * MB) as usize,
             file_upload_max_bytes: (number("FILE_UPLOAD_MAX_MB", 100)? * MB) as usize,
             snapshot_retention: Duration::from_secs(number("SNAPSHOT_RETENTION_DAYS", 2)? * 86_400),
+            link_share_edit_ttl: Duration::from_millis(number(
+                "LINK_SHARE_EDIT_DEFAULT_TTL_MS",
+                7 * 86_400_000,
+            )?),
+            link_share_view_ttl: Duration::from_millis(number(
+                "LINK_SHARE_VIEW_DEFAULT_TTL_MS",
+                30 * 86_400_000,
+            )?),
+            link_share_max_ttl: Duration::from_millis(number(
+                "LINK_SHARE_MAX_TTL_MS",
+                90 * 86_400_000,
+            )?),
         })
     }
 
@@ -156,6 +174,9 @@ impl Config {
             body_limit_bytes: 50 * 1024 * 1024,
             file_upload_max_bytes: 100 * 1024 * 1024,
             snapshot_retention: Duration::from_secs(2 * 86_400),
+            link_share_edit_ttl: Duration::from_secs(7 * 86_400),
+            link_share_view_ttl: Duration::from_secs(30 * 86_400),
+            link_share_max_ttl: Duration::from_secs(90 * 86_400),
         }
     }
 }
@@ -271,6 +292,9 @@ mod tests {
         assert_eq!(cfg.body_limit_bytes, 50 * 1024 * 1024);
         assert_eq!(cfg.file_upload_max_bytes, 100 * 1024 * 1024);
         assert_eq!(cfg.snapshot_retention, Duration::from_secs(2 * 86_400));
+        assert_eq!(cfg.link_share_edit_ttl, Duration::from_secs(7 * 86_400));
+        assert_eq!(cfg.link_share_view_ttl, Duration::from_secs(30 * 86_400));
+        assert_eq!(cfg.link_share_max_ttl, Duration::from_secs(90 * 86_400));
         assert_eq!(cfg.frontend_origins, vec!["http://localhost:6767"]);
     }
 

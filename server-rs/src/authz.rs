@@ -81,37 +81,44 @@ pub fn to_public_collection_id(collection_id: Option<&str>, user_id: &str) -> Op
     })
 }
 
-/// Node `getDrawingAccess`; anonymous callers (link shares are out of scope) get None.
+/// Node `getDrawingAccess`: the user's own access (if signed in) or the drawing's active
+/// "anyone with the link" policy, whichever is stronger.
 pub async fn drawing_access(
     db: &PgPool,
     user_id: Option<&str>,
     drawing_id: &str,
 ) -> Result<Option<Access>, sqlx::Error> {
-    let Some(user_id) = user_id else {
-        return Ok(None);
-    };
-    let row: Option<(String, Option<String>, bool, Option<String>)> = sqlx::query_as(
+    type Row = (String, Option<String>, bool, Option<String>, Option<String>);
+    let row: Option<Row> = sqlx::query_as(&format!(
         r#"SELECT d."userId",
                   (SELECT p.permission FROM "DrawingPermission" p
                     WHERE p."drawingId" = d.id AND p."granteeUserId" = $2),
                   EXISTS (SELECT 1 FROM "Collection" c
                            WHERE c.id = d."collectionId" AND c."userId" = $2),
                   (SELECT s.role FROM "CollectionShare" s
-                    WHERE s."collectionId" = d."collectionId" AND s."granteeUserId" = $2)
-           FROM "Drawing" d WHERE d.id = $1"#,
-    )
+                    WHERE s."collectionId" = d."collectionId" AND s."granteeUserId" = $2),
+                  (SELECT l.permission FROM "DrawingLinkShare" l
+                    WHERE l."drawingId" = d.id AND l."revokedAt" IS NULL
+                      AND (l."expiresAt" IS NULL OR l."expiresAt" > {NOW_UTC})
+                    ORDER BY l."createdAt" DESC LIMIT 1)
+           FROM "Drawing" d WHERE d.id = $1"#
+    ))
     .bind(drawing_id)
     .bind(user_id)
     .fetch_optional(db)
     .await?;
-    Ok(row.and_then(|(owner, grant, owns_collection, role)| {
-        resolve_access(
-            &owner,
-            user_id,
-            grant.as_deref(),
-            owns_collection,
-            role.as_deref(),
-        )
+    Ok(row.and_then(|(owner, grant, owns_collection, role, link)| {
+        let as_user = user_id.and_then(|user_id| {
+            resolve_access(
+                &owner,
+                user_id,
+                grant.as_deref(),
+                owns_collection,
+                role.as_deref(),
+            )
+        });
+        // "Anyone with the link": possession of the drawing URL grants the policy.
+        as_user.max(link.as_deref().and_then(Access::from_grant))
     }))
 }
 

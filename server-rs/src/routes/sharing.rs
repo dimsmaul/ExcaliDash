@@ -9,12 +9,13 @@ use axum::{
     routing::{delete, get, patch, post},
     Json, Router,
 };
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{json, Value};
 
 use crate::{
-    auth::middleware::RequireUser,
+    auth::{jwt::hash_token, middleware::RequireUser},
     authz::Access,
+    config::Config,
     error::{AppError, AppResult},
     socket,
     state::AppState,
@@ -31,6 +32,11 @@ pub fn router() -> Router<AppState> {
             delete(revoke_permission),
         )
         .route("/drawings/{id}/shared-visibility", patch(shared_visibility))
+        .route("/drawings/{id}/link-shares", post(create_link_share))
+        .route(
+            "/drawings/{id}/link-shares/{share_id}",
+            delete(revoke_link_share),
+        )
 }
 
 fn error(status: StatusCode, message: &str) -> AppError {
@@ -126,9 +132,15 @@ async fn sharing(
     .bind(&id)
     .fetch_all(&state.db)
     .await?;
+    let links: Vec<LinkShareRow> = sqlx::query_as(&format!(
+        r#"{LINK_SHARE_SELECT} WHERE "drawingId" = $1 ORDER BY "createdAt" DESC"#
+    ))
+    .bind(&id)
+    .fetch_all(&state.db)
+    .await?;
     Ok(Json(json!({
         "permissions": rows.iter().map(PermissionRow::to_json).collect::<Vec<_>>(),
-        "linkShares": [],
+        "linkShares": links.iter().map(|l| l.to_json(true)).collect::<Vec<_>>(),
     })))
 }
 
@@ -235,4 +247,219 @@ async fn shared_visibility(
         return Err(error(StatusCode::NOT_FOUND, "Shared drawing not found"));
     }
     Ok(Json(json!({ "success": true, "hidden": hidden })))
+}
+
+#[derive(sqlx::FromRow)]
+struct LinkShareRow {
+    id: String,
+    permission: String,
+    #[sqlx(rename = "expiresAt")]
+    expires_at: Option<NaiveDateTime>,
+    #[sqlx(rename = "revokedAt")]
+    revoked_at: Option<NaiveDateTime>,
+    #[sqlx(rename = "createdAt")]
+    created_at: NaiveDateTime,
+    #[sqlx(rename = "updatedAt")]
+    updated_at: NaiveDateTime,
+    #[sqlx(rename = "lastUsedAt")]
+    last_used_at: Option<NaiveDateTime>,
+}
+
+const LINK_SHARE_SELECT: &str = r#"SELECT id, permission, "expiresAt", "revokedAt", "createdAt", "updatedAt", "lastUsedAt"
+FROM "DrawingLinkShare""#;
+
+impl LinkShareRow {
+    /// `/sharing` lists include `updatedAt`/`lastUsedAt`; the create response does not.
+    fn to_json(&self, full: bool) -> Value {
+        let mut value = json!({
+            "id": self.id, "permission": self.permission,
+            "expiresAt": self.expires_at.map(iso), "revokedAt": self.revoked_at.map(iso),
+            "createdAt": iso(self.created_at),
+        });
+        if full {
+            value["updatedAt"] = json!(iso(self.updated_at));
+            value["lastUsedAt"] = json!(self.last_used_at.map(iso));
+        }
+        value
+    }
+}
+
+/// `POST /drawings/{id}/link-shares` `{permission, expiresAt?}` (owner only): replaces any
+/// active "anyone with the link" policy. The link is the drawing URL itself; the token
+/// hash only satisfies the schema.
+async fn create_link_share(
+    State(state): State<AppState>,
+    RequireUser(user): RequireUser,
+    Path(id): Path<String>,
+    body: Option<Json<Value>>,
+) -> AppResult<Json<Value>> {
+    require_owner(&state, &id, &user.id).await?;
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let permission = body
+        .get("permission")
+        .and_then(Value::as_str)
+        .and_then(Access::from_grant)
+        .ok_or_else(|| {
+            AppError::status(
+                StatusCode::BAD_REQUEST,
+                "Validation error",
+                "Invalid permission",
+            )
+        })?;
+    let expires_at = link_expiry(&body, permission, Utc::now(), &state.cfg).map_err(|message| {
+        AppError::status(StatusCode::BAD_REQUEST, "Validation error", message)
+    })?;
+
+    let mut tx = state.db.begin().await?;
+    sqlx::query(&format!(
+        r#"UPDATE "DrawingLinkShare" SET "revokedAt" = {NOW_UTC}, "updatedAt" = {NOW_UTC}
+           WHERE "drawingId" = $1 AND "revokedAt" IS NULL"#
+    ))
+    .bind(&id)
+    .execute(&mut *tx)
+    .await?;
+    let share: LinkShareRow = sqlx::query_as(&format!(
+        r#"INSERT INTO "DrawingLinkShare" (id, "drawingId", permission, "tokenHash", "expiresAt", "createdByUserId", "createdAt", "updatedAt")
+           VALUES ($1, $2, $3, $4, $5, $6, {NOW_UTC}, {NOW_UTC})
+           RETURNING id, permission, "expiresAt", "revokedAt", "createdAt", "updatedAt", "lastUsedAt""#
+    ))
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(&id)
+    .bind(permission.as_str())
+    .bind(hash_token(&uuid::Uuid::new_v4().to_string()))
+    .bind(expires_at.map(|t| t.naive_utc()))
+    .bind(&user.id)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "share": share.to_json(false) })))
+}
+
+/// `DELETE /drawings/{id}/link-shares/{shareId}` (owner only), then kick sockets that
+/// only had access through the link.
+async fn revoke_link_share(
+    State(state): State<AppState>,
+    RequireUser(user): RequireUser,
+    Path((id, share_id)): Path<(String, String)>,
+) -> AppResult<Json<Value>> {
+    require_owner(&state, &id, &user.id).await?;
+    sqlx::query(&format!(
+        r#"UPDATE "DrawingLinkShare" SET "revokedAt" = {NOW_UTC}, "updatedAt" = {NOW_UTC}
+           WHERE id = $1 AND "drawingId" = $2 AND "revokedAt" IS NULL"#
+    ))
+    .bind(&share_id)
+    .bind(&id)
+    .execute(&state.db)
+    .await?;
+    socket::revalidate_drawing_access(&state, &id).await;
+    Ok(Json(json!({ "success": true })))
+}
+
+/// Node link-share expiry rules: explicit `null` never expires; a timestamp must be at
+/// least a minute ahead (edit links capped at the max TTL); absent → per-permission default.
+pub fn link_expiry(
+    body: &Value,
+    permission: Access,
+    now: DateTime<Utc>,
+    cfg: &Config,
+) -> Result<Option<DateTime<Utc>>, &'static str> {
+    let max = chrono::Duration::from_std(cfg.link_share_max_ttl).unwrap_or(chrono::Duration::MAX);
+    let cap = |ttl: chrono::Duration| {
+        if permission == Access::Edit {
+            ttl.min(max)
+        } else {
+            ttl
+        }
+    };
+    match body.get("expiresAt") {
+        Some(Value::Null) => Ok(None),
+        None => {
+            let default = match permission {
+                Access::Edit => cfg.link_share_edit_ttl,
+                _ => cfg.link_share_view_ttl,
+            };
+            let default = chrono::Duration::from_std(default).unwrap_or(chrono::Duration::MAX);
+            Ok(Some(now + cap(default)))
+        }
+        Some(value) => {
+            let requested = value
+                .as_str()
+                .map(str::trim)
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                .ok_or("Invalid expiry")?
+                .with_timezone(&Utc);
+            let ttl = requested - now;
+            if ttl < chrono::Duration::seconds(60) {
+                return Err("Expiry must be at least 1 minute in the future");
+            }
+            Ok(Some(now + cap(ttl)))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn now() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 10, 15, 12, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn defaults_per_permission() {
+        let cfg = Config::for_tests();
+        assert_eq!(
+            link_expiry(&json!({}), Access::View, now(), &cfg),
+            Ok(Some(now() + chrono::Duration::days(30)))
+        );
+        assert_eq!(
+            link_expiry(&json!({}), Access::Edit, now(), &cfg),
+            Ok(Some(now() + chrono::Duration::days(7)))
+        );
+    }
+
+    #[test]
+    fn explicit_null_never_expires() {
+        let cfg = Config::for_tests();
+        assert_eq!(
+            link_expiry(&json!({"expiresAt": null}), Access::Edit, now(), &cfg),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn requested_expiry_is_bounded() {
+        let cfg = Config::for_tests();
+        let in_a_year = "2027-10-15T12:00:00.000Z";
+        assert_eq!(
+            link_expiry(&json!({"expiresAt": in_a_year}), Access::View, now(), &cfg),
+            Ok(Some(Utc.with_ymd_and_hms(2027, 10, 15, 12, 0, 0).unwrap()))
+        );
+        assert_eq!(
+            link_expiry(&json!({"expiresAt": in_a_year}), Access::Edit, now(), &cfg),
+            Ok(Some(now() + chrono::Duration::days(90))),
+            "edit links are capped"
+        );
+        assert_eq!(
+            link_expiry(
+                &json!({"expiresAt": "2026-10-15T12:00:30Z"}),
+                Access::View,
+                now(),
+                &cfg
+            ),
+            Err("Expiry must be at least 1 minute in the future")
+        );
+        for bad in [
+            json!({"expiresAt": "soon"}),
+            json!({"expiresAt": ""}),
+            json!({"expiresAt": 5}),
+        ] {
+            assert_eq!(
+                link_expiry(&bad, Access::View, now(), &cfg),
+                Err("Invalid expiry"),
+                "{bad}"
+            );
+        }
+    }
 }

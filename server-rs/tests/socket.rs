@@ -115,9 +115,13 @@ async fn engine_io_payload_limit_matches_body_limit() {
     );
 }
 
-#[tokio::test]
-async fn anonymous_socket_cannot_join_a_drawing() {
-    let app = spawn_app(unreachable_pool()).await;
+/// Anonymous sockets are only let in through an active link share (see
+/// `anonymous_visitor_joins_through_an_edit_link`); without one they are refused.
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "needs postgres"]
+async fn anonymous_socket_cannot_join_a_drawing(pool: PgPool) {
+    setup(&pool).await;
+    let app = spawn_app(pool).await;
     let mut peer = connect(&app, None).await;
     peer.join("d1", "Mallory").await;
     assert_eq!(
@@ -279,4 +283,49 @@ async fn scene_save_broadcasts_persisted_update(pool: PgPool) {
     assert_eq!(update["persisted"], true);
     assert_eq!(update["drawingId"], "d1");
     assert_eq!(update["elementOrder"], json!(["saved"]));
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "needs postgres"]
+async fn anonymous_visitor_joins_through_an_edit_link(pool: PgPool) {
+    setup(&pool).await;
+    sqlx::query(
+        r#"INSERT INTO "DrawingLinkShare" (id, "drawingId", permission, "tokenHash", "createdByUserId", "updatedAt")
+           VALUES ('ls1', 'd1', 'edit', 'hash', 'u1', timezone('utc', now()))"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = spawn_app(pool).await;
+    let mut alice = connect(&app, Some("u1")).await;
+    alice.join("d1", "Alice").await;
+    alice.next("presence-update").await;
+
+    let mut guest = connect(&app, None).await;
+    guest.join("d1", "Guest").await;
+    let presence = guest.next("presence-update").await;
+    let me = presence
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["name"] == "Guest")
+        .unwrap()
+        .clone();
+    assert!(
+        me["id"].as_str().unwrap().starts_with("anon:"),
+        "anonymous identity is server-assigned"
+    );
+
+    guest
+        .client
+        .emit(
+            "element-update",
+            json!({"drawingId": "d1", "elements": [{"id": "g"}]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        alice.next("element-update").await["elements"],
+        json!([{"id": "g"}])
+    );
 }
