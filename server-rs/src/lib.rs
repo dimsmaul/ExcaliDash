@@ -1,7 +1,9 @@
 pub mod auth;
 pub mod authz;
 pub mod config;
+pub mod drawing;
 pub mod error;
+pub mod files_store;
 pub mod routes;
 pub mod sanitize;
 pub mod snapshot_codec;
@@ -50,6 +52,7 @@ pub fn build_app(db: PgPool, cfg: Config) -> Router {
         .route("/csrf-token", get(auth::csrf::token_route))
         .merge(auth::routes::router())
         .merge(routes::collections::router())
+        .merge(routes::drawings::router())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::csrf::middleware,
