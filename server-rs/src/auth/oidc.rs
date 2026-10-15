@@ -79,9 +79,12 @@ pub fn sanitize_return_to(raw: Option<&str>) -> String {
     let Some(value) = raw.map(str::trim) else {
         return "/".into();
     };
+    // Stricter than Node: browsers read `\` as `/` and strip tabs/newlines, so either
+    // could turn a path into a protocol-relative `//host` redirect.
     let safe = value.starts_with('/')
         && !value.starts_with("//")
-        && !value.contains(['\r', '\n'])
+        && !value.contains('\\')
+        && !value.chars().any(char::is_control)
         && value.len() <= 2048;
     if safe {
         value.to_string()
@@ -696,6 +699,10 @@ mod tests {
         assert_eq!(sanitize_return_to(Some("//evil.example")), "/");
         assert_eq!(sanitize_return_to(Some("https://evil.example")), "/");
         assert_eq!(sanitize_return_to(Some("/a\r\nSet-Cookie: x")), "/");
+        // Browsers treat `\` as `/` and drop tabs, turning these into `//evil.example`.
+        assert_eq!(sanitize_return_to(Some("/\\evil.example")), "/");
+        assert_eq!(sanitize_return_to(Some("/\t/evil.example")), "/");
+        assert_eq!(sanitize_return_to(Some("/drawings\\x")), "/");
         assert_eq!(
             sanitize_return_to(Some(&format!("/{}", "a".repeat(2048)))),
             "/"
