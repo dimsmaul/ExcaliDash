@@ -54,6 +54,7 @@ pub fn build_app(db: PgPool, cfg: Config) -> Router {
         .merge(routes::collections::router())
         .merge(routes::drawings::router())
         .merge(routes::history::router())
+        .merge(routes::files::router(cfg.file_upload_max_bytes))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::csrf::middleware,
