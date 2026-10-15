@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 pub mod routes;
 pub mod sanitize;
+pub mod snapshot_codec;
 pub mod state;
 pub mod time;
 
