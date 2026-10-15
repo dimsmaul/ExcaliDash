@@ -10,6 +10,7 @@ use std::sync::Arc;
 use axum::{
     extract::DefaultBodyLimit,
     http::{header, HeaderName, HeaderValue, Method},
+    middleware,
     routing::get,
     Router,
 };
@@ -38,7 +39,12 @@ pub fn build_app(db: PgPool, cfg: Config) -> Router {
 
     Router::new()
         .route("/health", get(routes::misc::health))
+        .route("/csrf-token", get(auth::csrf::token_route))
         .merge(auth::routes::router())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::csrf::middleware,
+        ))
         .with_state(state)
         .layer(socket_layer)
         .layer(DefaultBodyLimit::max(cfg.body_limit_bytes))
