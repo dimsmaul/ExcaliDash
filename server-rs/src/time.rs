@@ -1,5 +1,8 @@
 use chrono::NaiveDateTime;
 
+/// SQL for "now" as a UTC `TIMESTAMP(3)` value, matching what Prisma writes.
+pub const NOW_UTC: &str = "timezone('utc', now())";
+
 /// Formats a Prisma `TIMESTAMP(3)` (stored as UTC) the way `Date#toJSON` does.
 pub fn iso(dt: NaiveDateTime) -> String {
     dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()

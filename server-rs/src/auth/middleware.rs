@@ -8,7 +8,7 @@ use super::{
     cookies::{read_cookie, ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE},
     jwt,
 };
-use crate::{config::AuthMode, error::AppError, state::AppState};
+use crate::{config::AuthMode, error::AppError, state::AppState, time::NOW_UTC};
 
 pub const BOOTSTRAP_USER_ID: &str = "bootstrap-admin";
 
@@ -38,8 +38,8 @@ const USER_COLUMNS: &str = r#"id, username, email, name, role, "mustResetPasswor
 /// Node `getBootstrapActingUser`: upsert of the shared user used when auth is disabled.
 pub async fn bootstrap_user(db: &PgPool) -> Result<UserCtx, sqlx::Error> {
     sqlx::query_as(&format!(
-        r#"INSERT INTO "User" (id, email, username, "passwordHash", name, role, "mustResetPassword", "isActive", "updatedAt")
-           VALUES ($1, 'bootstrap@excalidash.local', NULL, '', 'Bootstrap Admin', 'ADMIN', true, false, CURRENT_TIMESTAMP)
+        r#"INSERT INTO "User" (id, email, username, "passwordHash", name, role, "mustResetPassword", "isActive", "createdAt", "updatedAt")
+           VALUES ($1, 'bootstrap@excalidash.local', NULL, '', 'Bootstrap Admin', 'ADMIN', true, false, {NOW_UTC}, {NOW_UTC})
            ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
            RETURNING {USER_COLUMNS}"#
     ))

@@ -35,6 +35,11 @@ pub fn build_app(db: PgPool, cfg: Config) -> Router {
         db,
         cfg: cfg.clone(),
         io,
+        http: reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("http client"),
+        oidc_discovery: Default::default(),
     };
 
     Router::new()

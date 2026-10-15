@@ -1,5 +1,6 @@
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::config::Config;
 
@@ -54,6 +55,27 @@ pub fn verify_refresh(cfg: &Config, token: &str) -> Option<Claims> {
     verify(cfg, token, "refresh")
 }
 
+/// Signature/expiry check only; callers inspect `token_type` themselves.
+pub fn verify_any(cfg: &Config, token: &str) -> Option<Claims> {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.leeway = 0;
+    decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(cfg.jwt_secret.as_bytes()),
+        &validation,
+    )
+    .ok()
+    .map(|data| data.claims)
+}
+
+/// Node `hashTokenForStorage`: refresh tokens are stored as sha256 hex.
+pub fn hash_token(token: &str) -> String {
+    Sha256::digest(token.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 fn sign(cfg: &Config, user_id: &str, email: &str, token_type: &str, ttl_secs: i64) -> String {
     let iat = chrono::Utc::now().timestamp();
     let claims = Claims {
@@ -76,15 +98,7 @@ fn sign(cfg: &Config, user_id: &str, email: &str, token_type: &str, ttl_secs: i6
 }
 
 fn verify(cfg: &Config, token: &str, token_type: &str) -> Option<Claims> {
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.leeway = 0;
-    let data = decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(cfg.jwt_secret.as_bytes()),
-        &validation,
-    )
-    .ok()?;
-    (data.claims.token_type == token_type).then_some(data.claims)
+    verify_any(cfg, token).filter(|claims| claims.token_type == token_type)
 }
 
 #[cfg(test)]
@@ -122,6 +136,26 @@ mod tests {
         let refresh = verify_refresh(&cfg, &pair.refresh).expect("valid refresh");
         assert_eq!(refresh.exp - refresh.iat, 7 * 86_400);
         assert!(verify_refresh(&cfg, &pair.access).is_none());
+    }
+
+    #[test]
+    fn hash_token_is_sha256_hex() {
+        assert_eq!(
+            hash_token("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn verify_any_accepts_both_types() {
+        let cfg = Config::for_tests();
+        let pair = issue_pair(&cfg, "u1", "a@example.com");
+        assert_eq!(
+            verify_any(&cfg, &pair.refresh).unwrap().token_type,
+            "refresh"
+        );
+        assert_eq!(verify_any(&cfg, &pair.access).unwrap().token_type, "access");
+        assert!(verify_any(&cfg, "garbage").is_none());
     }
 
     #[test]

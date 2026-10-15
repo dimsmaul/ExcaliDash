@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod idp;
+
 use std::time::Duration;
 
 use excalidash_server::{build_app, config::Config};
@@ -14,6 +16,45 @@ impl TestApp {
     pub fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
     }
+
+    /// A CSRF token plus the `excalidash-csrf-client=...` cookie pair it is bound to.
+    pub async fn csrf(&self) -> Csrf {
+        let res = reqwest::get(self.url("/csrf-token")).await.unwrap();
+        let cookie = res.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+        let body: serde_json::Value = res.json().await.unwrap();
+        Csrf {
+            token: body["token"].as_str().unwrap().to_string(),
+            cookie,
+        }
+    }
+
+    /// Request without the cookie store, so tests control the `Cookie` header exactly.
+    pub fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+            .request(method, self.url(path))
+    }
+}
+
+pub struct Csrf {
+    pub token: String,
+    pub cookie: String,
+}
+
+pub fn set_cookies(res: &reqwest::Response) -> Vec<String> {
+    res.headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect()
 }
 
 /// A pool that never connects; DB-touching routes fail fast instead of hanging.
@@ -27,7 +68,7 @@ pub fn unreachable_pool() -> PgPool {
 pub async fn seed_user(pool: &PgPool, id: &str, email: &str, name: &str, active: bool) {
     sqlx::query(
         r#"INSERT INTO "User" (id, email, "passwordHash", name, "isActive", "updatedAt")
-           VALUES ($1, $2, '', $3, $4, CURRENT_TIMESTAMP)"#,
+           VALUES ($1, $2, '', $3, $4, timezone('utc', now()))"#,
     )
     .bind(id)
     .bind(email)
