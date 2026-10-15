@@ -9,6 +9,7 @@ import { CollectionPicker } from "./drawing-card/CollectionPicker";
 import { DrawingCardContextMenu } from "./drawing-card/DrawingCardContextMenu";
 import { useDrawingPreview } from "./drawing-card/useDrawingPreview";
 import * as api from "../api";
+import { withApiFileUrls } from "../api/client";
 
 interface DrawingCardProps {
   drawing: DrawingSummary;
@@ -213,7 +214,7 @@ export const DrawingCard: React.FC<DrawingCardProps> = ({
                 "w-full h-full p-4 sm:p-5 flex items-center justify-center [&>svg]:w-auto [&>svg]:h-auto [&>svg]:max-w-full [&>svg]:max-h-full [&>svg]:drop-shadow-xs transition-transform duration-550",
                 "drawing-preview",
               )}
-              dangerouslySetInnerHTML={{ __html: previewSvg }}
+              dangerouslySetInnerHTML={{ __html: withApiFileUrls(previewSvg) }}
             />
           ) : (
             <div className="w-16 h-16 sm:w-20 sm:h-20 lg:w-24 lg:h-24 bg-white dark:bg-neutral-900 rounded-2xl shadow-sm flex items-center justify-center text-neutral-300 dark:text-neutral-400 border border-neutral-100 dark:border-neutral-800 transform group-hover:scale-105 group-hover:rotate-1 transition-all duration-500">

@@ -210,6 +210,13 @@ fn redirect(location: &str, cookies: &[String]) -> Response {
     res
 }
 
+/// Absolute URL on the frontend (first `FRONTEND_URL` origin): the frontend may be
+/// hosted apart from the API (e.g. Vercel), so post-login redirects must not be relative.
+fn to_frontend(state: &AppState, path: &str) -> String {
+    let origin = state.cfg.frontend_origins.first().map_or("", String::as_str);
+    format!("{origin}{path}")
+}
+
 /// `GET /auth/oidc/start?returnTo=/path`
 pub async fn start(
     State(state): State<AppState>,
@@ -224,13 +231,14 @@ pub async fn start(
         Err(err) => {
             tracing::error!(%err, "OIDC discovery failed");
             return redirect(
-                &login_error_location("callback_failed", None),
+                &to_frontend(&state, &login_error_location("callback_failed", None)),
                 &[clear_cookie(&headers, FLOW_COOKIE)],
             );
         }
     };
+    let failed = to_frontend(&state, &login_error_location("callback_failed", None));
     let Ok(oidc) = oidc_config(&state) else {
-        return redirect(&login_error_location("callback_failed", None), &[]);
+        return redirect(&failed, &[]);
     };
     let flow = FlowPayload {
         state: random_token(),
@@ -240,7 +248,7 @@ pub async fn start(
         expires_at: now_ms() + FLOW_TTL_MS,
     };
     let Ok(mut url) = Url::parse(&disc.authorization_endpoint) else {
-        return redirect(&login_error_location("callback_failed", None), &[]);
+        return redirect(&failed, &[]);
     };
     url.query_pairs_mut()
         .append_pair("client_id", &oidc.client_id)
@@ -270,11 +278,14 @@ pub async fn callback(
     let flow = read_cookie(&headers, FLOW_COOKIE)
         .and_then(|cookie| decode_flow(&cookie, &state.cfg.jwt_secret, now_ms()));
     let Some(flow) = flow else {
-        return redirect(&login_error_location("missing_flow", None), &[clear_flow]);
+        return redirect(
+            &to_frontend(&state, &login_error_location("missing_flow", None)),
+            &[clear_flow],
+        );
     };
     let fail = |code: &str| {
         redirect(
-            &login_error_location(code, Some(&flow.return_to)),
+            &to_frontend(&state, &login_error_location(code, Some(&flow.return_to))),
             std::slice::from_ref(&clear_flow),
         )
     };
@@ -290,7 +301,7 @@ pub async fn callback(
     }
     match complete_login(&state, &flow, &params).await {
         Ok(tokens) => redirect(
-            &flow.return_to,
+            &to_frontend(&state, &flow.return_to),
             &[
                 clear_flow.clone(),
                 set_cookie(

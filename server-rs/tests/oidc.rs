@@ -12,6 +12,9 @@ use reqwest::Response;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
+/// `Config::for_tests().frontend_origins[0]`: the backend redirects back to the frontend
+/// after login, which may live on another host than the API (e.g. Vercel).
+const FRONTEND: &str = "http://localhost:6767";
 const NONCE: &str = "nonce-123";
 const STATE: &str = "state-123";
 
@@ -55,7 +58,7 @@ async fn assert_login_error(res: Response, code: &str) {
     assert_eq!(res.status(), 302);
     let loc = location(&res);
     assert!(
-        loc.starts_with(&format!("/login?oidcError={code}&")),
+        loc.starts_with(&format!("{FRONTEND}/login?oidcError={code}&")),
         "{loc}"
     );
     assert!(set_cookies(&res)
@@ -162,7 +165,7 @@ async fn callback_without_flow_cookie() {
         .unwrap();
     assert_eq!(
         location(&res),
-        "/login?oidcError=missing_flow&oidcErrorMessage=Missing+or+expired+OIDC+login+flow.+Please+try+again."
+        format!("{FRONTEND}/login?oidcError=missing_flow&oidcErrorMessage=Missing+or+expired+OIDC+login+flow.+Please+try+again.")
     );
     assert_login_error(res, "missing_flow").await;
 }
@@ -273,7 +276,7 @@ async fn first_login_creates_admin_with_trash_identity_and_session(pool: PgPool)
     let app = spawn_app_with(cfg.clone(), pool.clone()).await;
     let res = callback(&app, &cfg, "code=c&state=state-123").await;
     assert_eq!(res.status(), 302);
-    assert_eq!(location(&res), "/drawings/1");
+    assert_eq!(location(&res), format!("{FRONTEND}/drawings/1"));
     let cookies = set_cookies(&res);
     assert!(cookies
         .iter()
@@ -326,7 +329,7 @@ async fn second_user_is_regular_and_returning_user_is_matched(pool: PgPool) {
         idp.respond_once_with_id_token(&token).await;
         let res = callback(&app, &cfg, "code=c&state=state-123").await;
         assert_eq!(res.status(), 302, "{email}");
-        assert_eq!(location(&res), "/drawings/1");
+        assert_eq!(location(&res), format!("{FRONTEND}/drawings/1"));
     }
     let rows: Vec<(String, String)> =
         sqlx::query_as(r#"SELECT email, role FROM "User" ORDER BY "createdAt""#)

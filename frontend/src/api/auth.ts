@@ -126,7 +126,7 @@ export const startOidcSignIn = (returnTo?: string): void => {
       ? returnTo
       : fallbackPath;
   const safeReturnTo = requestedPath.startsWith("/") ? requestedPath : "/";
-  window.location.href = `/api/auth/oidc/start?returnTo=${encodeURIComponent(safeReturnTo)}`;
+  window.location.href = `${API_URL}/auth/oidc/start?returnTo=${encodeURIComponent(safeReturnTo)}`;
 };
 
 export const authMe = async (): Promise<{ user: AuthUser }> => {

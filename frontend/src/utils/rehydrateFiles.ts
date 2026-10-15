@@ -15,6 +15,8 @@
  * {@link filesNeedRehydration} short-circuits and nothing is fetched.
  */
 
+import { toApiUrl } from "../api/client";
+
 /**
  * A dataURL value that must be fetched and re-inlined: a non-empty string that
  * is not already an inline `data:` URL and points at our file endpoint or an
@@ -56,7 +58,8 @@ const fetchAsDataUrl = async (
   fallbackUrl?: string,
 ): Promise<string | null> => {
   try {
-    let response = await fetch(url, { credentials: "same-origin" });
+    // `include`: the managed endpoint may be on the API host (see toApiUrl).
+    let response = await fetch(url, { credentials: "include" });
     if (response.status === 404 && fallbackUrl) {
       response = await fetch(fallbackUrl, { credentials: "same-origin" });
     }
@@ -135,7 +138,9 @@ export const rehydrateFilesForExport = async (
             ? originalUrl
             : undefined;
           const dataURL = await fetchAsDataUrl(
-            `/api/files/${encodeURIComponent(drawingId)}/${encodeURIComponent(fileId)}`,
+            toApiUrl(
+              `/api/files/${encodeURIComponent(drawingId)}/${encodeURIComponent(fileId)}`,
+            ),
             file.mimeType,
             fallbackUrl,
           );
