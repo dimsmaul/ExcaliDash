@@ -34,8 +34,9 @@ const HSTS: &str = "max-age=31536000; includeSubDomains; preload";
 
 pub fn build_app(db: PgPool, cfg: Config) -> Router {
     let cfg = Arc::new(cfg);
+    // Node sets socket.io `maxHttpBufferSize` to BODY_LIMIT_MB so large scene deltas fit.
     let (socket_layer, io) = SocketIo::builder()
-        .max_buffer_size(cfg.body_limit_bytes)
+        .max_payload(cfg.body_limit_bytes as u64)
         .build_layer();
     let state = AppState {
         db,
@@ -46,7 +47,9 @@ pub fn build_app(db: PgPool, cfg: Config) -> Router {
             .build()
             .expect("http client"),
         oidc_discovery: Default::default(),
+        collab: Default::default(),
     };
+    socket::register(&state);
 
     Router::new()
         .route("/csrf-token", get(auth::csrf::token_route))
